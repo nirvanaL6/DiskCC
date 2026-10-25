@@ -130,11 +130,35 @@ if IS_WIN:
     if os.path.isfile(os.path.join(SPECPATH, "file_version.txt")):
         exe_kwargs["version"] = os.path.join(SPECPATH, "file_version.txt")   # 版本资源
 
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.datas,
-    [],                  # PyInstaller 6.x：Analysis 不再产 zipfiles，占位空 TOC
-    **exe_kwargs,
-)
+# v1.3.3：新增 onedir（目录模式）构建，DISKCC_ONEDIR=1 时启用。
+# 背景：onefile 每次启动都要把 python3xx.dll 等全部解压到 %TEMP%\_MEIxxxx 再
+# LoadLibrary，部分用户机器上这一步会被杀软实时扫描拦截，报
+# "Failed to load Python DLL ... LoadLibrary: 内存位置访问无效"(错误 998)。
+# onedir 不写临时目录、直接从程序目录加载，可从根上绕开该故障模式。
+ONEDIR = os.environ.get("DISKCC_ONEDIR", "") == "1"
+
+if ONEDIR:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        [],                  # onedir：二进制由下方 COLLECT 输出到程序目录
+        exclude_binaries=True,
+        **exe_kwargs,
+    )
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.datas,
+        strip=True,
+        upx=False,
+        name="DiskCC",       # 产物：dist/DiskCC/DiskCC.exe
+    )
+else:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.datas,
+        [],                  # PyInstaller 6.x：Analysis 不再产 zipfiles，占位空 TOC
+        **exe_kwargs,
+    )

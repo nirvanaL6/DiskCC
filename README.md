@@ -363,6 +363,22 @@ A：默认走回收站，去回收站还原即可；命令类项目（DISM、关
 - 测试：全量 `tests/full_test.py`（144 项断言）在上述修改后复跑全部通过；spec 的 exec 兼容性已处理（`SPECPATH` 兜底）。
 - 审查遗留（低风险 P2，暂不改动）：`Dockerfile.wine` 建议改用完整版 Windows Python、若干未使用导入清理、直删路径补历史留痕，计划后续版本处理。
 
+### v1.3.3
+
+修复 GitHub Actions 构建的 exe 在部分用户机器上无法启动的问题，并让 CI 真正验证构建产物。
+
+**问题**：v1.3.2 起改由 CI 构建单文件 exe，部分机器双击报
+`Failed to load Python DLL '...\_MEIxxxx\python311.dll'. LoadLibrary: 内存位置访问无效（错误 998）`。
+根因在 PyInstaller bootloader 阶段（应用代码尚未运行）：onefile 每次启动都要把 python311.dll 等全部解压到 `%TEMP%\_MEIxxxx` 再 `LoadLibrary`，该步骤在部分机器（最典型为杀软对临时目录中无签名新 DLL 的实时拦截）会失败。
+
+**修复**
+
+| 改动 | 说明 |
+|---|---|
+| 新增 **onedir 目录模式**构建（推荐） | `DISKCC_ONEDIR=1 pyinstaller DiskCC.spec` 产出 `dist/DiskCC/`（含 `DiskCC.exe` 与 `_internal/`），不写临时目录、直接从程序目录加载，从根上绕开上述故障模式。CI Release 现附 **`DiskCC-vX.Y.Z-win64.zip`（推荐下载）** |
+| 单文件 exe 保留 | 供偏好单文件的场景使用；若在个别机器上仍被拦截，请改用 onedir 包或将 exe 加入杀软白名单 |
+| CI 新增 exe 冒烟测试 | 构建 → 运行 `DiskCC.exe --version` 验证 bootloader/Python 初始化/退出码，onefile 与 onedir 各测一次（新增 `main.py --version` 参数） |
+
 ### v1.3.2
 
 本版本在不改变任何功能、交互与判定结果的前提下，围绕**扫描速度 / 运行稳定性 / 程序体积**做了一轮优化。改动均以 `tests/bench.py`（新增的可复现基准）与 `tests/full_test.py` 量化验证，断言全部通过。
