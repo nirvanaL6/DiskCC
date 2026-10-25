@@ -6,6 +6,9 @@ on:
       - 'v*'            # 打 tag 时自动构建并发布 Release
   workflow_dispatch:    # 也支持手动在 Actions 页面点一下触发
 
+permissions:
+  contents: write       # 创建 Release 并上传资产所需（默认只读会导致发布失败）
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -59,5 +62,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: DiskCC-${{ github.ref_name }}.zip
+          files: |
+            dist/DiskCC.exe
+            DiskCC-${{ github.ref_name }}.zip
+            dist/DiskCC.exe.sha256.txt
+          fail_on_unmatched_files: true
           generate_release_notes: true
