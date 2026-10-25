@@ -1,0 +1,40 @@
+# 自建 Windows 构建镜像：Ubuntu + Wine + Windows Python 3.11 + PyInstaller + PySide6
+# 用于在 Linux 上（无需本机 Windows）产出 Windows 版 DiskCC.exe
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+# Wine 跑 64 位 PE 需要启用 i386 并装 wine32（WoW64 层），否则 wine64 也报 not supported
+RUN dpkg --add-architecture i386 \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        wine wine64 wine32 wget ca-certificates unzip winetricks xvfb \
+    && rm -rf /var/lib/apt/lists/*
+
+# 初始化 64 位 Wine 前缀（禁用 Mono/Gecko 下载弹窗）
+ENV WINEARCH=win64
+ENV WINEPREFIX=/root/.wine
+ENV WINEDLLOVERRIDES=mscoree,mshtml=
+RUN wineboot --init || true
+
+# 用 Windows 嵌入式 Python（zip 免安装）：headless Wine 下 MSI 安装器会退出 243，故绕开安装器
+RUN wget -q https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip -O /tmp/py.zip \
+    && mkdir -p /root/.wine/drive_c/Python311 \
+    && unzip -o -q /tmp/py.zip -d /root/.wine/drive_c/Python311 \
+    && rm -f /tmp/py.zip
+# 启用 import site（让 pip 装的包可被导入）
+RUN sed -i 's/^#import site/import site/' /root/.wine/drive_c/Python311/python311._pth
+
+# 引导 pip（绕过安装器）
+RUN wget -q https://bootstrap.pypa.io/get-pip.py -O /tmp/get-pip.py \
+    && wine64 c:/Python311/python.exe /tmp/get-pip.py \
+    && rm -f /tmp/get-pip.py
+
+# Qt6 运行需要 MSVC 运行库（尽力安装，失败不阻断）
+RUN winetricks -q vcrun2019 || true
+
+# 升级 pip 并预装依赖（PySide6 体积大，放在镜像层缓存）
+RUN wine64 c:/Python311/python.exe -m pip install --upgrade pip setuptools wheel
+COPY requirements.txt requirements-build.txt /app/
+RUN wine64 c:/Python311/python.exe -m pip install -r /app/requirements.txt -r /app/requirements-build.txt
+
+WORKDIR /src
+CMD ["bash"]

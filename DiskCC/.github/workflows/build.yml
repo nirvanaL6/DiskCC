@@ -1,0 +1,63 @@
+name: Build DiskCC Windows EXE
+
+on:
+  push:
+    tags:
+      - 'v*'            # 打 tag 时自动构建并发布 Release
+  workflow_dispatch:    # 也支持手动在 Actions 页面点一下触发
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-build.txt
+
+      - name: Run regression tests
+        run: |
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          python tests/full_test.py
+        shell: pwsh
+
+      - name: Build EXE with PyInstaller (single-file)
+        run: |
+          pyinstaller --noconfirm --clean DiskCC.spec
+
+      - name: Compute SHA256
+        shell: pwsh
+        run: |
+          (Get-FileHash dist/DiskCC.exe -Algorithm SHA256).Hash | Out-File -Encoding utf8 dist/DiskCC.exe.sha256.txt
+          Get-Content dist/DiskCC.exe.sha256.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DiskCC-exe
+          path: |
+            dist/DiskCC.exe
+            dist/DiskCC.exe.sha256.txt
+          if-no-files-found: error
+
+      - name: Zip and Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          Compress-Archive -Path dist/DiskCC.exe -DestinationPath DiskCC-${{ github.ref_name }}.zip
+        shell: pwsh
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: DiskCC-${{ github.ref_name }}.zip
+          generate_release_notes: true

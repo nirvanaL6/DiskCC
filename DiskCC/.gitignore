@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+*.spec.bak
+
+# 打包/构建产物
+DiskCC_v*.zip
+*.exe
+
+# 日志与临时
+*.log
+core*
+.DS_Store
+.idea/
+.vscode/
