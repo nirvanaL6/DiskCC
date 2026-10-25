@@ -11,6 +11,14 @@ from diskcc.models import (human_size, parse_risk, Risk, ItemKind, ScanItem, Sca
 from diskcc.config import Config
 from diskcc.utils import fs
 
+# 兼容 Windows 旧代码页：CI 运行器/裸 cmd 默认可能是 cp1252，编码不了中文与 emoji，
+# 会让第一条 print 就抛 UnicodeEncodeError。这里强制标准流使用 UTF-8。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 FAILED = []
 def chk(label, cond, extra=""):
     print(f"  {'✅' if cond else '❌'} {label} {extra}")

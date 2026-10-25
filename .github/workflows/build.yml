@@ -9,6 +9,9 @@ on:
 permissions:
   contents: write       # 创建 Release 并上传资产所需（默认只读会导致发布失败）
 
+env:
+  PYTHONUTF8: "1"       # Windows 运行器默认 cp1252，中文/emoji 输出会抛 UnicodeEncodeError，强制 Python 走 UTF-8
+
 jobs:
   build-windows:
     runs-on: windows-latest
