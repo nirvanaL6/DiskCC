@@ -84,6 +84,7 @@ def run_gui() -> int:
 
 def main(argv=None) -> int:
     _bootstrap_paths()
+    from diskcc import __version__
     parser = argparse.ArgumentParser(
         prog="DiskCC",
         description="Windows C 盘智能清理工具（内置规则库 + 可选 AI 识别）",
@@ -94,6 +95,8 @@ def main(argv=None) -> int:
     parser.add_argument("--min-size", type=float, default=None, help="忽略小于指定 MB 的项目")
     parser.add_argument("--selftest", action="store_true", help="运行内置自测（构造模拟磁盘树）")
     parser.add_argument("--admin", action="store_true", help="以管理员权限重新启动（Windows）")
+    parser.add_argument("--version", action="version", version=f"DiskCC {__version__}",
+                        help="显示版本号后退出（可用于验证 exe 能正常启动）")
     args = parser.parse_args(argv)
 
     if args.admin:

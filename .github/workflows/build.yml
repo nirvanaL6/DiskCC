@@ -40,6 +40,25 @@ jobs:
         run: |
           pyinstaller --noconfirm --clean DiskCC.spec
 
+      - name: Smoke test single-file exe (--version)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\DiskCC.exe" -ArgumentList "--version" -Wait -PassThru
+          Write-Host "single-file exe exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { Write-Error "onefile exe smoke test failed"; exit 1 }
+          Write-Host "single-file exe 启动正常"
+
+      - name: Build onedir package (recommended distribution)
+        shell: pwsh
+        run: |
+          $env:DISKCC_ONEDIR = '1'
+          pyinstaller --noconfirm --clean DiskCC.spec
+          $p = Start-Process -FilePath "dist\DiskCC\DiskCC.exe" -ArgumentList "--version" -Wait -PassThru
+          Write-Host "onedir exe exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { Write-Error "onedir exe smoke test failed"; exit 1 }
+          Write-Host "onedir exe 启动正常"
+          Compress-Archive -Path dist\DiskCC -DestinationPath "DiskCC-${{ github.ref_name }}-win64.zip"
+
       - name: Compute SHA256
         shell: pwsh
         run: |
@@ -53,13 +72,8 @@ jobs:
           path: |
             dist/DiskCC.exe
             dist/DiskCC.exe.sha256.txt
+            DiskCC-*-win64.zip
           if-no-files-found: error
-
-      - name: Zip and Release (on tag)
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          Compress-Archive -Path dist/DiskCC.exe -DestinationPath DiskCC-${{ github.ref_name }}.zip
-        shell: pwsh
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -67,7 +81,7 @@ jobs:
         with:
           files: |
             dist/DiskCC.exe
-            DiskCC-${{ github.ref_name }}.zip
+            DiskCC-${{ github.ref_name }}-win64.zip
             dist/DiskCC.exe.sha256.txt
           fail_on_unmatched_files: true
           generate_release_notes: true
