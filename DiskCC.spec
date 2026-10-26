@@ -113,7 +113,7 @@ exe_kwargs = dict(
     name="DiskCC",
     debug=False,
     bootloader_ignore_signals=False,
-    strip=True,          # 去除二进制中的调试符号
+    strip=False,         # Windows 上 strip PE 可能损坏 DLL/exe，导致加载器弹窗挂死；关闭
     upx=False,           # 不用 UPX 加壳：UPX 加壳是各家杀软的重点怀疑对象
     runtime_tmpdir=None,
     console=False,       # GUI 程序，不弹控制台
@@ -153,7 +153,7 @@ if ONEDIR:
         exe,
         a.binaries,
         a.datas,
-        strip=True,
+        strip=False,
         upx=False,
         name="DiskCC",       # 产物：dist/DiskCC/DiskCC.exe
     )
