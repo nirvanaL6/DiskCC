@@ -57,28 +57,32 @@ jobs:
       - name: Smoke test single-file exe (--version)
         shell: pwsh
         run: |
-          try {
-            $p = Start-Process -FilePath "dist\DiskCC.exe" -ArgumentList "--version" -Wait -PassThru -TimeoutSec 180
-            Write-Host "single-file exe exit code: $($p.ExitCode)"
-            if ($p.ExitCode -ne 0) { throw "exit code $($p.ExitCode)" }
-            Write-Host "single-file exe 启动正常"
-          } catch {
-            Write-Error "onefile exe smoke test failed: $_"; exit 1
+          # 注意：runner 的 PowerShell 不支持 Start-Process 的 -TimeoutSec，
+          # 改用 WaitForExit(ms) 做超时兜底（兼容 PS 5.1 / 7）。
+          $p = Start-Process -FilePath "dist\DiskCC.exe" -ArgumentList "--version" -PassThru
+          if (-not $p.WaitForExit(180000)) {
+            Write-Warning "onefile exe 未在 180s 内退出，强制结束"
+            $p.Kill()
+            Write-Error "onefile exe smoke test timed out"; exit 1
           }
+          Write-Host "single-file exe exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { Write-Error "onefile exe smoke test failed (exit $($p.ExitCode))"; exit 1 }
+          Write-Host "single-file exe 启动正常"
 
       - name: Build onedir package (recommended distribution)
         shell: pwsh
         run: |
           $env:DISKCC_ONEDIR = '1'
           pyinstaller --noconfirm --clean DiskCC.spec
-          try {
-            $p = Start-Process -FilePath "dist\DiskCC\DiskCC.exe" -ArgumentList "--version" -Wait -PassThru -TimeoutSec 180
-            Write-Host "onedir exe exit code: $($p.ExitCode)"
-            if ($p.ExitCode -ne 0) { throw "exit code $($p.ExitCode)" }
-            Write-Host "onedir exe 启动正常"
-          } catch {
-            Write-Error "onedir exe smoke test failed: $_"; exit 1
+          $p = Start-Process -FilePath "dist\DiskCC\DiskCC.exe" -ArgumentList "--version" -PassThru
+          if (-not $p.WaitForExit(180000)) {
+            Write-Warning "onedir exe 未在 180s 内退出，强制结束"
+            $p.Kill()
+            Write-Error "onedir exe smoke test timed out"; exit 1
           }
+          Write-Host "onedir exe exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { Write-Error "onedir exe smoke test failed (exit $($p.ExitCode))"; exit 1 }
+          Write-Host "onedir exe 启动正常"
           Compress-Archive -Path dist\DiskCC -DestinationPath "DiskCC-${{ github.ref_name }}-win64.zip"
 
       - name: Compute SHA256
