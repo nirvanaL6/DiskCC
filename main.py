@@ -25,15 +25,39 @@ def run_cli(args: argparse.Namespace) -> int:
     if args.min_size is not None:
         cfg.set("min_size_mb", args.min_size)
     ai = AIAnalyzer(cfg, lambda m: print(m, flush=True))
+
+    if args.fake_disk:
+        # CI/自测专用：构造模拟 C 盘并注入上下文，避免扫描真实系统盘带来的
+        # 不确定性（注册表/进程枚举/磁盘用量在共享 runner 上偶发超时）。
+        import shutil
+        import tempfile
+
+        from tests.selftest import build_ctx, build_fake_disk
+
+        _root = tempfile.mkdtemp(prefix="diskcc_fake_")
+        build_fake_disk(_root)
+        cfg.set("min_size_mb", 0.05)
+        try:
+            injected_ctx = build_ctx(_root, cfg)
+            manager = ScanManager(cfg, ai, log=lambda m: print(m, flush=True),
+                                  ctx=injected_ctx)
+            result = manager.run()
+        finally:
+            shutil.rmtree(_root, ignore_errors=True)
+        return _export_cli_result(args, result, human_size)
     manager = ScanManager(cfg, ai, log=lambda m: print(m, flush=True))
     result = manager.run()
+    return _export_cli_result(args, result, human_size)
+
+
+def _export_cli_result(args, result, human_size) -> int:
+    from diskcc.models import category_name
 
     print("\n" + "=" * 72)
     print(f"扫描完成：{len(result.items)} 项，合计 {human_size(result.total_size)}，"
           f"耗时 {result.elapsed:.1f}s")
     print("=" * 72)
     by_cat = result.by_category()
-    from diskcc.models import category_name
 
     for cat, items in sorted(by_cat.items(), key=lambda kv: -sum(i.size for i in kv[1])):
         size = sum(i.size for i in items)
@@ -90,6 +114,8 @@ def main(argv=None) -> int:
         description="Windows C 盘智能清理工具（内置规则库 + 可选 AI 识别）",
     )
     parser.add_argument("--cli", action="store_true", help="命令行模式：扫描并输出报告，不启动界面")
+    parser.add_argument("--fake-disk", action="store_true",
+                        help="命令行模式仅用于测试：扫描内置模拟盘而非真实系统盘")
     parser.add_argument("--out", default="", help="命令行模式下导出报告的路径（.csv 或 .json）")
     parser.add_argument("--config", default="", help="指定配置文件路径")
     parser.add_argument("--min-size", type=float, default=None, help="忽略小于指定 MB 的项目")

@@ -168,36 +168,27 @@ print("\n=== F. CLI 模式 ===")
 import subprocess
 outdir = tempfile.mkdtemp()
 csv_out = os.path.join(outdir, "r.csv"); json_out = os.path.join(outdir, "r.json")
-# CI 上若让 CLI 扫描真实系统盘（Program Files / AppData 等），在 runner 上
-# 偶发超过 5 分钟超时导致构建失败。这里把所有扫描器依赖的环境变量重定向到
-# 一个微型临时目录，使 CLI 只扫该小目录——既快又确定，同时完整验证报告生成链路。
-_fake = tempfile.mkdtemp(prefix="diskcc_fake_sys_")
-_fenv = dict(os.environ)
-_fenv.update({
-    "SYSTEMDRIVE": _fake + "\\",
-    "USERPROFILE": os.path.join(_fake, "UP"),
-    "APPDATA": os.path.join(_fake, "AP"),
-    "LOCALAPPDATA": os.path.join(_fake, "LA"),
-    "PROGRAMDATA": os.path.join(_fake, "PD"),
-    "PROGRAMFILES": os.path.join(_fake, "PF"),
-    "PROGRAMFILES(X86)": os.path.join(_fake, "PF86"),
-    "WINDIR": os.path.join(_fake, "WINDOWS"),
-    "TEMP": os.path.join(_fake, "TEMP"),
-    "TMP": os.path.join(_fake, "TEMP"),
-})
-p1 = subprocess.run([sys.executable, os.path.join(ROOT, "main.py"), "--cli", "--out", csv_out],
-                    capture_output=True, text=True, timeout=120, env=_fenv)
+# CI（设置了 DISKCC_CI_SKIP_GUI）上不让 CLI 扫描真实系统盘：注册表/进程枚举/磁盘
+# 用量在共享 runner 上偶发超时。改用 --fake-disk 扫内置模拟盘，确定性验证报告生成链路。
+# 本地运行（未设该变量）仍走真实盘，覆盖真实扫描路径。
+CI = bool(os.environ.get("DISKCC_CI_SKIP_GUI"))
+_extra = ["--fake-disk"] if CI else []
+p1 = subprocess.run([sys.executable, os.path.join(ROOT, "main.py"), "--cli",
+                     "--out", csv_out] + _extra,
+                    capture_output=True, text=True, timeout=120)
 chk("CLI 退出码 0", p1.returncode == 0, f"(rc={p1.returncode})")
 if p1.returncode != 0:
     print("--- CLI stdout ---\n" + (p1.stdout or "")[:2000])
     print("--- CLI stderr ---\n" + (p1.stderr or "")[:2000])
 chk("CLI CSV 报告生成", os.path.isfile(csv_out))
-p2 = subprocess.run([sys.executable, os.path.join(ROOT, "main.py"), "--cli", "--out", json_out],
-                    capture_output=True, text=True, timeout=120, env=_fenv)
+p2 = subprocess.run([sys.executable, os.path.join(ROOT, "main.py"), "--cli",
+                     "--out", json_out] + _extra,
+                    capture_output=True, text=True, timeout=120)
 chk("CLI JSON 报告生成", os.path.isfile(json_out))
 if os.path.isfile(json_out):
     with open(json_out) as f: data_j = json.load(f)
     chk("CLI JSON 结构合法", isinstance(data_j, list))
+    chk("CLI JSON 含扫描项", isinstance(data_j, list) and len(data_j) > 0)
 
 print("\n=== G. 清理历史（v1.1.2 新增） ===")
 from diskcc.history import CleanHistory, HistoryEntry
