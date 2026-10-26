@@ -126,7 +126,11 @@ exe_kwargs = dict(
 
 if IS_WIN:
     exe_kwargs["icon"] = os.path.join(SPECPATH, "assets", "diskcc.ico")
-    exe_kwargs["uac_admin"] = True
+    # 不用 requireAdministrator：该清单会让 exe 在启动时强制弹 UAC 提权。
+    # 非交互式 CI runner 没有同意界面，进程会无限阻塞等待提权（--version 都卡死），
+    # 也无法自动冒烟验证。改用 asInvoker，需要管理员权限清理系统目录时由应用内的
+    # --admin / relaunch_as_admin 按需提权。
+    exe_kwargs["uac_admin"] = False
     if os.path.isfile(os.path.join(SPECPATH, "file_version.txt")):
         exe_kwargs["version"] = os.path.join(SPECPATH, "file_version.txt")   # 版本资源
 
