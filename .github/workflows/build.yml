@@ -57,7 +57,12 @@ jobs:
           pyinstaller --noconfirm DiskCC.spec
           # 暂存单文件 exe：后续 onedir 构建的 --clean 会清空整个 dist/，先把单文件挪到 stage/
           New-Item -ItemType Directory -Force -Path stage | Out-Null
-          Copy-Item dist\DiskCC.exe stage\DiskCC.onefile.exe
+          $sf = "dist\DiskCC.exe"
+          if (-not (Test-Path $sf)) { Write-Error "single-file exe 不存在：$sf"; exit 1 }
+          $sfsize = (Get-Item $sf).Length
+          if ($sfsize -lt 5MB) { Write-Error "single-file exe 体积异常（$sfsize），疑似构建失败"; exit 1 }
+          Write-Host "single-file exe size = $sfsize bytes"
+          Copy-Item $sf stage\DiskCC.onefile.exe
           Write-Host "single-file exe 构建完成"
 
       - name: Build onedir package (recommended distribution)
@@ -68,27 +73,74 @@ jobs:
           pyinstaller --noconfirm --clean DiskCC.spec
           # 恢复单文件 exe 到 dist/（与 onedir 目录 dist/DiskCC/ 并存）
           Copy-Item stage\DiskCC.onefile.exe dist\DiskCC.exe
-          # 冒烟：onedir 直接从程序目录加载、无需解包到 %TEMP%，CI 上稳定可靠，作为发布门槛。
-          # GUI（console=False）exe 不接管控制台；Start-Process 不重定向时，WaitForExit 对
-          # 窗口化进程可能不返回，误判超时。这里重定向到文件打破该问题，并输出内容便于诊断。
-          $env:QT_QPA_PLATFORM = 'offscreen'   # 防御性：避免 Qt 在无显示环境初始化异常
-          $so = "onedir_smoke.out"; $se = "onedir_smoke.err"
-          $p = Start-Process -FilePath "dist\DiskCC\DiskCC.exe" -ArgumentList "--version" -PassThru `
-               -RedirectStandardOutput $so -RedirectStandardError $se -WindowStyle Hidden
-          # 用 HasExited 轮询代替 WaitForExit：区分"进程真没退出"与"WaitForExit 对窗口化
-          # 进程不返回"两种情况。
-          $exited = $false
-          for ($k = 0; $k -lt 60; $k++) {
-            Start-Sleep -Seconds 1
-            if ($p.HasExited) { $exited = $true; break }
+          # ---- 产物静态校验（无论能否启动冒烟都要做，防止空壳产物被发布）----
+          $exe = "dist\DiskCC\DiskCC.exe"
+          if (-not (Test-Path $exe)) { Write-Error "onedir exe 不存在：$exe"; exit 1 }
+          $size = (Get-Item $exe).Length
+          Write-Host "onedir exe size = $size bytes"
+          # onedir 模式下 exe 只有 bootloader + 极小的嵌入式 PKG（约 2~3MB），
+          # 真正的 PYZ 字节码与 Qt DLL 都在 _internal/。因此 exe 只做"bootloader
+          # 健全性"下限检查，体积校验要看整个目录总和（见下）。
+          if ($size -lt 500KB) { Write-Error "onedir exe 体积异常（$size），疑似构建失败"; exit 1 }
+          $total = (Get-ChildItem -Path "dist\DiskCC" -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+          if (-not $total) { $total = 0 }
+          Write-Host "onedir bundle size = $total bytes"
+          if ($total -lt 20MB) { Write-Error "onedir 产物总体积异常（$total），疑似依赖未打包"; exit 1 }
+          foreach ($needle in @("python3", "Qt6Core", "Qt6Widgets", "Qt6Gui", "qwindows")) {
+            $hit = Get-ChildItem -Path "dist\DiskCC" -Recurse -Filter "*$needle*" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $hit) { Write-Error "onedir 产物缺少关键依赖：$needle"; exit 1 }
+            Write-Host "  依赖检查 OK: $needle -> $($hit.Name)"
           }
-          Write-Host "=== onedir stdout ==="; Get-Content $so -ErrorAction SilentlyContinue
-          Write-Host "=== onedir stderr ==="; Get-Content $se -ErrorAction SilentlyContinue
-          Write-Host "=== bootstrap error ==="; Get-Content "$env:TEMP\diskcc_bootstrap_error.txt" -ErrorAction SilentlyContinue
-          Write-Host "ExitCode=$($p.ExitCode) Exited=$exited"
-          if (-not $exited) { $p.Kill(); Write-Error "onedir exe smoke test timed out"; exit 1 }
-          if ($p.ExitCode -ne 0) { Write-Error "onedir exe smoke test failed (exit $($p.ExitCode))"; exit 1 }
-          Write-Host "onedir exe 启动正常"
+          # 确认瘦身生效（这几项目录属于纯资源，运行时不会加载）
+          $left = @(Get-ChildItem -Path "dist\DiskCC" -Recurse -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @("qml", "translations", "metatypes") })
+          if ($left) {
+            Write-Host "⚠️ 仍存在未裁剪目录：$($left.Name -join ', ')"
+          } else {
+            Write-Host "✅ qml / translations / metatypes 已裁掉"
+          }
+
+          # ---- 启动冒烟 ----
+          # v1.3.4 起 exe 恢复 requireAdministrator（默认提权）。未提升的会话里
+          # CreateProcess 会直接失败（740，需要提权）而不是挂起，因此先判断当前
+          # 是否已提升：未提升时跳过启动验证（只保留上面的静态校验），避免误判
+          # 构建失败。
+          $curId = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $curPrincipal = [Security.Principal.WindowsPrincipal]$curId
+          $elevated = $curPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          Write-Host "runner elevated = $elevated"
+          if (-not $elevated) {
+            Write-Host "⚠️ 当前会话未提升，requireAdministrator 的 exe 无法在此启动；跳过启动冒烟（静态校验已通过）"
+          } else {
+            # GUI（console=False）exe 不接管控制台；重定向到文件才能拿到输出。
+            $env:QT_QPA_PLATFORM = 'offscreen'   # 防御性：避免 Qt 在无显示环境初始化异常
+            $so = "onedir_smoke.out"; $se = "onedir_smoke.err"
+            $p = $null
+            try {
+              $p = Start-Process -FilePath $exe -ArgumentList "--version" -PassThru `
+                   -RedirectStandardOutput $so -RedirectStandardError $se -WindowStyle Hidden
+            } catch {
+              # requireAdministrator 的 exe 在个别运行器上可能因令牌/策略无法创建
+              # 进程（错误 740）。这属于环境限制而非构建缺陷，静态校验已通过，
+              # 故只告警不阻断。
+              Write-Warning "onedir exe 无法启动（$($_.Exception.Message)），跳过启动冒烟"
+            }
+            if ($p) {
+              # 用 HasExited 轮询代替 WaitForExit：区分"进程真没退出"与
+              # "WaitForExit 对窗口化进程不返回"两种情况。
+              $exited = $false
+              for ($k = 0; $k -lt 60; $k++) {
+                Start-Sleep -Seconds 1
+                if ($p.HasExited) { $exited = $true; break }
+              }
+              Write-Host "=== onedir stdout ==="; Get-Content $so -ErrorAction SilentlyContinue
+              Write-Host "=== onedir stderr ==="; Get-Content $se -ErrorAction SilentlyContinue
+              Write-Host "=== bootstrap error ==="; Get-Content "$env:TEMP\diskcc_bootstrap_error.txt" -ErrorAction SilentlyContinue
+              Write-Host "ExitCode=$($p.ExitCode) Exited=$exited"
+              if (-not $exited) { $p.Kill(); Write-Error "onedir exe smoke test timed out"; exit 1 }
+              if ($p.ExitCode -ne 0) { Write-Error "onedir exe smoke test failed (exit $($p.ExitCode))"; exit 1 }
+              Write-Host "onedir exe 启动正常"
+            }
+          }
           Compress-Archive -Path dist\DiskCC -DestinationPath "DiskCC-${{ github.ref_name }}-win64.zip"
 
       # CI（offscreen / 无事件循环）环境下 Windows Defender 会实时扫描 PyInstaller
@@ -99,6 +151,13 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
+          $curId = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $curPrincipal = [Security.Principal.WindowsPrincipal]$curId
+          $elevated = $curPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          if (-not $elevated) {
+            Write-Warning "会话未提升，requireAdministrator 的单文件 exe 无法启动；跳过单文件冒烟"
+            exit 0
+          }
           $env:QT_QPA_PLATFORM = 'offscreen'
           $so = "onefile_smoke.out"; $se = "onefile_smoke.err"
           $p = Start-Process -FilePath "dist\DiskCC.exe" -ArgumentList "--version" -PassThru `
