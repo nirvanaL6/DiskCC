@@ -47,6 +47,7 @@ jobs:
       - name: Run regression tests
         run: |
           $env:QT_QPA_PLATFORM = 'offscreen'
+          $env:DISKCC_CI_SKIP_GUI = '1'   # CI offscreen 下跳过易崩的纯 GUI 段（本地覆盖）
           python tests/full_test.py
         shell: pwsh
 
