@@ -964,6 +964,47 @@ chk("spec 提供可选瘦身开关", "DISKCC_SLIM" in _spec_src)
 
 shutil.rmtree(rootM, ignore_errors=True)
 
+print("\n=== N. v1.3.4：删除错误码 120/124 与体积裁剪回归 ===")
+from diskcc.utils import win as _win
+
+# 1) SHFileOperation 返回码必须按 DE_* 解释（微软文档：pre-Win32 码优先于 winerror.h）
+_txt120 = _win.explain_shfileop_error(120)
+_txt124 = _win.explain_shfileop_error(124)
+chk("120 解释为 DE_ACCESSDENIEDSRC（非 Winerror 的函数未实现）",
+    "拒绝访问" in _txt120, f"({_txt120})")
+chk("124 解释为 DE_INVALIDFILES（非 Winerror 的调用级别错误）",
+    "路径" in _txt124, f"({_txt124})")
+chk("120 归入访问类错误", 120 in _win.SHFILEOP_ACCESS_ERRORS)
+chk("124 归入路径类错误", 124 in _win.SHFILEOP_PATH_ERRORS)
+chk("0xB7（超出 MAX_PATH）归入路径类", 0xB7 in _win.SHFILEOP_PATH_ERRORS)
+chk("未知码也能给出可读输出", "代码" in _win.explain_shfileop_error(999))
+
+# 2) 新接口返回三元组（带原始码），旧接口保持两元组兼容
+chk("delete_to_bin 返回三元组", len(_win.delete_to_bin([])) == 3)
+chk("send_to_recycle_bin 仍返回两元组", len(_win.send_to_recycle_bin([])) == 2)
+
+# 3) 长路径助手：非 Windows 或短路径原样返回；已是前缀时不重复添加
+_short = os.path.join(tempfile.mkdtemp(), "a.txt")
+chk("短路径不改写", fs.long_path(_short) == _short, f"({fs.long_path(_short)})")
+_prefixed = "\\\\?\\C:\\very\\long"
+chk("已带前缀不重复添加", fs.long_path(_prefixed) == _prefixed)
+
+# 4) 清理器：路径类错误回退删除，访问类错误不回退（保留可还原机会）
+from diskcc.cleaner import Cleaner as _Cleaner
+_chk_src = open(os.path.join(ROOT, "diskcc", "cleaner.py")).read()
+chk("_clean_path 按错误码分类处理", "SHFILEOP_PATH_ERRORS" in _chk_src and "SHFILEOP_ACCESS_ERRORS" in _chk_src)
+chk("批量删除改为每批 20 个", ">= 20" in _chk_src)
+
+# 5) 打包：裁剪同时作用于 binaries 与 datas；UAC 默认开启
+chk("瘦身同时过滤 a.datas", "a.datas = [d for d in a.datas if not _is_bloat(d)]" in _spec_src)
+chk("裁剪模式覆盖 qml/translations/metatypes",
+    all(k in _spec_src for k in ('"/qml/"', '"/translations/"', '"/metatypes/"')))
+chk("UAC 默认 requireAdministrator", 'DISKCC_UAC", "1"' in _spec_src)
+from diskcc import __version__ as _ver134
+chk("版本号已升级到 1.3.4", tuple(int(x) for x in _ver134.split(".")) >= (1, 3, 4), f"({_ver134})")
+_req = open(os.path.join(ROOT, "requirements.txt")).read()
+chk("PySide6 已锁定上限", "PySide6>=6.5,<" in _req, f"({_req.splitlines()[2] if len(_req.splitlines())>2 else ''})")
+
 print("\n" + "=" * 60)
 
 # 显式销毁 Qt 窗口：offscreen 下不跑事件循环，解释器退出时由 GC 直接销毁大量

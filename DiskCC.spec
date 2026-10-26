@@ -67,20 +67,42 @@ datas = [
     (os.path.join(SPECPATH, "README.md"), "."),
 ]
 
-# ------------------------------------------------------------ 可选瘦身
-# PySide6 的 hook 会把整个 Qt/lib 目录收集进来，即使在 excludes 里已经排除了
-# 对应的 Python 模块（Qml / Quick / Pdf / 虚拟键盘 / Wayland ...），原生库仍会
-# 被打进 exe。这里提供一次性剔除能力：
-#   Linux/macOS: DISKCC_SLIM=1 pyinstaller DiskCC.spec
-#   Windows(cmd): set DISKCC_SLIM=1 && pyinstaller DiskCC.spec
-# 默认关闭：这些库在本机（Linux）验证为可安全移除，但 Windows 侧的 Qt 依赖链
-# 需要在 Windows 上跑一次才可确认，故不默认启用。
-SLIM = os.environ.get("DISKCC_SLIM", "") == "1"
-QT_SLIM_PATTERNS = (
-    "libQt6Qml", "Qt6Qml", "libQt6Quick", "Qt6Quick", "QtVirtualKeyboard",
-    "libQt6VirtualKeyboard", "libQt6Pdf", "Qt6Pdf", "QtWayland", "libQt6Wayland",
-    "libQt6EglFS", "QtQuick", "qt6qml",
+# ------------------------------------------------------------ 体积瘦身
+# PySide6 的 hook 会把整个 Qt 目录收集进来：即使在 excludes 里排除了对应的
+# Python 模块，原生库、QML 资源、翻译文件与类型元数据仍会进产物。实测
+# PySide6_Essentials 轮子内这些"用不上但会被打包"的内容合计约 75MB：
+#   qml/ 20MB、translations/ 13MB、resources(icudtl) 11MB、QtOpenGL.pyd 8.8MB、
+#   Qt6Quick 6MB、Qt6Qml 5.1MB、Qt6Designer 5.1MB、metatypes 5.9MB ...
+# v1.3.4 起默认剔除其中确定不会被加载的部分（保留 icudtl.dat：Qt6 的文本处理
+# 依赖 ICU 数据，误删会导致启动失败）。
+# 如需排查"是不是裁过头了"，用 DISKCC_SLIM=0 关闭后对照构建即可。
+SLIM = os.environ.get("DISKCC_SLIM", "1") != "0"
+
+# 匹配时同时看源路径与包内目标路径（a.binaries / a.datas 的第 1、2 个元素）。
+QT_BLOAT_PATTERNS = (
+    # 资源与元数据：运行时不会加载
+    "/qml/", "\\qml\\", "/translations/", "\\translations\\",
+    "/metatypes/", "\\metatypes\\",
+    # QML / Quick / Designer 的原生库与命令行工具
+    "qt6qml", "qt6quick", "qtquick", "qt6designer", "qt6qmlcompiler",
+    "libqt6qml", "libqt6quick", "libqt6designer",
+    "qmltooling", "qmlls", "qmlformat", "qtvirtualkeyboard",
+    # 已在 excludes 中排除、但 hook 仍会收进来的绑定与库
+    "qtopengl", "qt6pdf", "qtwayland", "libqt6eglfs",
+    # 用不到的插件后端
+    "sqldrivers", "platforminputcontexts", "networkinformation",
+    "/designer/", "\\designer\\",
+    # 平台插件只需 qwindows（qdirect2d / qminimal 用不到）
+    "qdirect2d", "qminimal",
+    # 图片格式只需 ico/jpeg/gif/svg（图标与界面用），其余可省
+    "qwebp", "qicns", "qtiff", "qpdf",
 )
+
+
+def _is_bloat(toc_entry) -> bool:
+    name = ((toc_entry[0] or "") + " " + (toc_entry[1] or "")).lower()
+    return any(p in name for p in QT_BLOAT_PATTERNS)
+
 
 a = Analysis(
     ["main.py"],
@@ -99,11 +121,10 @@ a = Analysis(
 pyz = PYZ(a.pure)
 
 if SLIM:
-    kept = [
-        b for b in a.binaries
-        if not any(p.lower() in os.path.basename(b[0]).lower() for p in QT_SLIM_PATTERNS)
-    ]
-    a.binaries = kept
+    # 关键：v1.3.2 只过滤了 a.binaries，而 qml/translations/metatypes 属于
+    # a.datas，因此从未被裁掉——这正是"每次更新都变大"的一部分原因。
+    a.binaries = [b for b in a.binaries if not _is_bloat(b)]
+    a.datas = [d for d in a.datas if not _is_bloat(d)]
 
 # 重要：EXE() 的前 5 个 TOC 参数（pyz / a.scripts / a.binaries / a.datas / []）
 # 必须按【位置参数】传入。PyInstaller 的 EXE(*args, **kwargs) 只按位置接收这些
@@ -126,11 +147,12 @@ exe_kwargs = dict(
 
 if IS_WIN:
     exe_kwargs["icon"] = os.path.join(SPECPATH, "assets", "diskcc.ico")
-    # 不用 requireAdministrator：该清单会让 exe 在启动时强制弹 UAC 提权。
-    # 非交互式 CI runner 没有同意界面，进程会无限阻塞等待提权（--version 都卡死），
-    # 也无法自动冒烟验证。改用 asInvoker，需要管理员权限清理系统目录时由应用内的
-    # --admin / relaunch_as_admin 按需提权。
-    exe_kwargs["uac_admin"] = False
+    # 默认 requireAdministrator：清理 %WINDIR%\Temp、SoftwareDistribution、
+    # 执行 DISM / powercfg 等都必须管理员权限，启动时直接提权最省事。
+    # （v1.3.3 曾改为 asInvoker 排查 CI 挂死，后证实真凶是 strip 而非 UAC，
+    #   v1.3.4 恢复为默认提权。）
+    # 需要不提权的产物（例如 CI 冒烟）时用 DISKCC_UAC=0 构建。
+    exe_kwargs["uac_admin"] = os.environ.get("DISKCC_UAC", "1") != "0"
     if os.path.isfile(os.path.join(SPECPATH, "file_version.txt")):
         exe_kwargs["version"] = os.path.join(SPECPATH, "file_version.txt")   # 版本资源
 

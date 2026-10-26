@@ -385,8 +385,24 @@ def make_writable(path: str) -> None:
         pass
 
 
+def long_path(path: str) -> str:
+    """给路径加上 \\\\?\\ 前缀以解除 MAX_PATH 限制（仅 Windows 有意义）。
+
+    Windows 的 os/shutil 在加了该前缀后会走扩展长度路径，可处理超过 260
+    字符的深路径（浏览器 Cache、Explorer 缩略图缓存等目录极易超出）。
+    已经是前缀形式或长度未超标的路径原样返回，避免不必要的行为变化。
+    """
+    if not IS_WINDOWS or not path:
+        return path
+    if path.startswith("\\\\?\\"):
+        return path
+    if len(path) < 240:
+        return path
+    return "\\\\?\\" + os.path.abspath(path)
+
+
 def force_remove_file(path: str) -> bool:
-    """删除单个文件，失败时尝试去掉只读后重试。"""
+    """删除单个文件，失败时尝试去掉只读后重试；仍失败再试长路径形式。"""
     try:
         os.remove(path)
         return True
@@ -396,11 +412,19 @@ def force_remove_file(path: str) -> bool:
             os.remove(path)
             return True
         except Exception:
-            return False
+            lp = long_path(path)
+            if lp == path:
+                return False
+            make_writable(lp)
+            try:
+                os.remove(lp)
+                return True
+            except Exception:
+                return False
 
 
 def remove_dir_tree(path: str) -> Tuple[bool, str]:
-    """递归删除目录（永久删除，慎用）。"""
+    """递归删除目录（永久删除，慎用）。超长路径自动改用 \\\\?\\ 形式。"""
     import shutil
 
     def _on_error(func, p, exc):
@@ -414,7 +438,15 @@ def remove_dir_tree(path: str) -> Tuple[bool, str]:
         shutil.rmtree(path, onerror=_on_error)
         return True, ""
     except Exception as e:
-        return False, str(e)
+        lp = long_path(path)
+        if lp == path:
+            return False, str(e)
+        # 路径过长（超过 MAX_PATH）时 shutil 会直接失败，改用扩展长度路径重试
+        try:
+            shutil.rmtree(lp, onerror=_on_error)
+            return True, ""
+        except Exception as e2:
+            return False, str(e2)
 
 
 def is_empty_dir(path: str) -> bool:

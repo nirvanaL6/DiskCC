@@ -198,19 +198,43 @@ class Cleaner:
             return True, f"执行成功 {tail}"
         return False, f"返回码 {rc}：{tail}"
 
+    def _delete_one(self, path: str, is_dir: bool) -> Tuple[bool, str]:
+        """永久删除单个文件/目录（不走回收站）。"""
+        if is_dir:
+            return fs.remove_dir_tree(path)
+        ok = fs.force_remove_file(path)
+        return ok, "" if ok else "文件删除失败（可能被占用或需要管理员权限）"
+
     def _clean_path(self, path: str, is_dir: bool) -> Tuple[bool, str]:
         use_bin = bool(self.cfg.get("use_recycle_bin", True))
         if use_bin:
-            ok, msg = win.send_to_recycle_bin([path])
+            ok, msg, code = win.delete_to_bin([path])
             if ok:
                 return True, "已移入回收站（可还原）"
+            # 路径类错误（0x7C / 0x79 / 0x81 / 0xB7）多为超过 MAX_PATH 的深层缓存
+            # 目录：回收站 API 本身无解，改用支持长路径的直接删除，避免"能删却报失败"。
+            if code in win.SHFILEOP_PATH_ERRORS:
+                ok2, msg2 = self._delete_one(path, is_dir)
+                if ok2:
+                    return True, "已永久删除（路径过长，回收站不支持，已改为直接删除）"
+                return False, f"移入回收站失败：{msg}；改为直接删除也失败：{msg2}"
+            if code in win.SHFILEOP_ACCESS_ERRORS:
+                return False, f"移入回收站失败：{msg}。请以管理员身份运行后重试"
             return False, f"移入回收站失败：{msg}"
-        if is_dir:
-            ok, msg = fs.remove_dir_tree(path)
-        else:
-            ok = fs.force_remove_file(path)
-            msg = "" if ok else "文件删除失败（可能被占用）"
-        return ok, msg
+        return self._delete_one(path, is_dir)
+
+    def _flush_batch(self, batch: List[str], use_bin: bool) -> Tuple[bool, str]:
+        """删除一批文件；回收站不接受的路径回退为永久删除。"""
+        if not use_bin:
+            return self._delete_batch(batch)
+        ok, msg, code = win.delete_to_bin(batch)
+        if ok:
+            return True, ""
+        # 只在"回收站 API 确实处理不了这种路径"时回退；权限类错误回退也删不掉，
+        # 不如保留可还原的机会并把原因如实告知用户。
+        if code in win.SHFILEOP_PATH_ERRORS:
+            return self._delete_batch(batch)
+        return False, msg
 
     def _clean_pattern(self, item: ScanItem) -> Tuple[bool, str]:
         """按模式删除一组文件。"""
@@ -221,19 +245,24 @@ class Cleaner:
         use_bin = bool(self.cfg.get("use_recycle_bin", True))
         done = 0
         failed = 0
+        detail = ""
         batch: List[str] = []
+        # 每批 20 个：SHFileOperation 的 pFrom 缓冲区对路径数量与总长度敏感，
+        # 一次塞太多会整批失败（表现为返回 124 / DE_INVALIDFILES）。
         for f in files:
             batch.append(f)
-            if len(batch) >= 30:
-                ok, _ = (win.send_to_recycle_bin(batch) if use_bin else self._delete_batch(batch))
+            if len(batch) >= 20:
+                ok, detail = self._flush_batch(batch, use_bin)
                 done += len(batch) if ok else 0
                 failed += 0 if ok else len(batch)
                 batch = []
         if batch:
-            ok, _ = (win.send_to_recycle_bin(batch) if use_bin else self._delete_batch(batch))
+            ok, detail = self._flush_batch(batch, use_bin)
             done += len(batch) if ok else 0
             failed += 0 if ok else len(batch)
         msg = f"共 {len(files)} 个文件，成功 {done}，失败 {failed}"
+        if failed and detail:
+            msg += f"（{detail}）"
         return failed == 0, msg
 
     @staticmethod
