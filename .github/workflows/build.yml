@@ -75,9 +75,11 @@ jobs:
           $so = "onedir_smoke.out"; $se = "onedir_smoke.err"
           $p = Start-Process -FilePath "dist\DiskCC\DiskCC.exe" -ArgumentList "--version" -PassThru `
                -RedirectStandardOutput $so -RedirectStandardError $se -WindowStyle Hidden
-          if (-not $p.WaitForExit(90000)) { $p.Kill(); Write-Error "onedir exe smoke test timed out"; exit 1 }
+          $exited = $p.WaitForExit(60000)
           Write-Host "=== onedir stdout ==="; Get-Content $so -ErrorAction SilentlyContinue
           Write-Host "=== onedir stderr ==="; Get-Content $se -ErrorAction SilentlyContinue
+          Write-Host "ExitCode=$($p.ExitCode) Exited=$exited"
+          if (-not $exited) { $p.Kill(); Write-Error "onedir exe smoke test timed out"; exit 1 }
           if ($p.ExitCode -ne 0) { Write-Error "onedir exe smoke test failed (exit $($p.ExitCode))"; exit 1 }
           Write-Host "onedir exe 启动正常"
           Compress-Archive -Path dist\DiskCC -DestinationPath "DiskCC-${{ github.ref_name }}-win64.zip"
