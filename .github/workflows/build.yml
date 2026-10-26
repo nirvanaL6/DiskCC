@@ -75,7 +75,13 @@ jobs:
           $so = "onedir_smoke.out"; $se = "onedir_smoke.err"
           $p = Start-Process -FilePath "dist\DiskCC\DiskCC.exe" -ArgumentList "--version" -PassThru `
                -RedirectStandardOutput $so -RedirectStandardError $se -WindowStyle Hidden
-          $exited = $p.WaitForExit(60000)
+          # 用 HasExited 轮询代替 WaitForExit：区分"进程真没退出"与"WaitForExit 对窗口化
+          # 进程不返回"两种情况。
+          $exited = $false
+          for ($k = 0; $k -lt 60; $k++) {
+            Start-Sleep -Seconds 1
+            if ($p.HasExited) { $exited = $true; break }
+          }
           Write-Host "=== onedir stdout ==="; Get-Content $so -ErrorAction SilentlyContinue
           Write-Host "=== onedir stderr ==="; Get-Content $se -ErrorAction SilentlyContinue
           Write-Host "=== bootstrap error ==="; Get-Content "$env:TEMP\diskcc_bootstrap_error.txt" -ErrorAction SilentlyContinue
