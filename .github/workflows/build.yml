@@ -78,6 +78,7 @@ jobs:
           $exited = $p.WaitForExit(60000)
           Write-Host "=== onedir stdout ==="; Get-Content $so -ErrorAction SilentlyContinue
           Write-Host "=== onedir stderr ==="; Get-Content $se -ErrorAction SilentlyContinue
+          Write-Host "=== bootstrap error ==="; Get-Content "$env:TEMP\diskcc_bootstrap_error.txt" -ErrorAction SilentlyContinue
           Write-Host "ExitCode=$($p.ExitCode) Exited=$exited"
           if (-not $exited) { $p.Kill(); Write-Error "onedir exe smoke test timed out"; exit 1 }
           if ($p.ExitCode -ne 0) { Write-Error "onedir exe smoke test failed (exit $($p.ExitCode))"; exit 1 }

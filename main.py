@@ -156,4 +156,19 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except Exception:
+        # 冻结 exe 中未处理异常会被引导器变成阻塞式对话框（无头 CI 上永久挂起）。
+        # 这里把 traceback 落盘，便于 CI 诊断，并确保进程以非零码干净退出。
+        import traceback as _tb
+
+        _ep = os.path.join(os.environ.get("TEMP") or os.getcwd(), "diskcc_bootstrap_error.txt")
+        try:
+            with open(_ep, "w", encoding="utf-8") as _f:
+                _tb.print_exc(file=_f)
+        except Exception:
+            pass
+        sys.exit(1)
