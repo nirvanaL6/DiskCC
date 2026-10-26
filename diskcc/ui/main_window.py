@@ -548,18 +548,25 @@ class MainWindow(QMainWindow):
     def _on_tree_changed(self, node: QTreeWidgetItem) -> None:
         if self._updating:
             return
-        key = node.data(0, Qt.ItemDataRole.UserRole)
-        state = node.checkState(0)
+        # 窗口/树在销毁过程中（offscreen 测试 GC 竞态或关闭动画）可能触发 itemChanged
+        # 回调，此时 node 的 C++ 对象已被释放，读取即抛 RuntimeError，无操作意义，安全跳过。
+        try:
+            key = node.data(0, Qt.ItemDataRole.UserRole)
+            state = node.checkState(0)
+        except RuntimeError:
+            return
         checked = state == Qt.CheckState.Checked
         self._updating = True
-        for it in self.items:
-            if key == "__all__" or it.category == key:
-                if not it.protected:
-                    it.checked = checked
-        self._refresh_table_checks()
-        self._update_tree_texts()
-        self._updating = False
-        self._update_stats()
+        try:
+            for it in self.items:
+                if key == "__all__" or it.category == key:
+                    if not it.protected:
+                        it.checked = checked
+            self._refresh_table_checks()
+            self._update_tree_texts()
+            self._update_stats()
+        finally:
+            self._updating = False
 
     def _on_tree_selected(self) -> None:
         if getattr(self, "_suppress_tree_select", False):
@@ -572,20 +579,25 @@ class MainWindow(QMainWindow):
 
     def _update_tree_texts(self) -> None:
         self._updating = True
-        groups: Dict[str, List[ScanItem]] = {}
-        for it in self.items:
-            groups.setdefault(it.category, []).append(it)
-        for key, node in self.cat_nodes.items():
-            if key == "__all__":
-                n = len(self.items)
-                sel = sum(1 for i in self.items if i.checked)
-                node.setText(0, f"全部 ({n})")
-                continue
-            group = groups.get(key, [])
-            size = sum(i.size for i in group)
-            cat = CATEGORIES.get(key, CATEGORIES["other"])
-            node.setText(0, f"{cat.name} ({len(group)} · {human_size(size)})")
-        self._updating = False
+        try:
+            groups: Dict[str, List[ScanItem]] = {}
+            for it in self.items:
+                groups.setdefault(it.category, []).append(it)
+            for key, node in self.cat_nodes.items():
+                if key == "__all__":
+                    n = len(self.items)
+                    sel = sum(1 for i in self.items if i.checked)
+                    node.setText(0, f"全部 ({n})")
+                    continue
+                group = groups.get(key, [])
+                size = sum(i.size for i in group)
+                cat = CATEGORIES.get(key, CATEGORIES["other"])
+                node.setText(0, f"{cat.name} ({len(group)} · {human_size(size)})")
+        except RuntimeError:
+            # 销毁过程中回调访问到已被 C++ 侧释放的 QTreeWidgetItem，无更新意义，安全跳过
+            pass
+        finally:
+            self._updating = False
 
     # ================================================================ 空间占用概览
     def _update_space_overview(self) -> None:
