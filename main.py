@@ -108,6 +108,14 @@ def run_gui() -> int:
 
 def main(argv=None) -> int:
     _bootstrap_paths()
+    # 窗口化（console=False）冻结 exe 下 sys.stdout/stderr 为 None；argparse 的
+    # --version 等动作向 None 写入会抛 AttributeError，被引导器变成阻塞式错误
+    # 对话框，在无桌面的 CI 上永久挂起。这里保证流存在，使 --version 干净退出。
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = sys.stdout
+
     from diskcc import __version__
     parser = argparse.ArgumentParser(
         prog="DiskCC",
