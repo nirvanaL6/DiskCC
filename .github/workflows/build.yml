@@ -68,9 +68,16 @@ jobs:
           pyinstaller --noconfirm --clean DiskCC.spec
           # 恢复单文件 exe 到 dist/（与 onedir 目录 dist/DiskCC/ 并存）
           Copy-Item stage\DiskCC.onefile.exe dist\DiskCC.exe
-          # 冒烟：onedir 直接从程序目录加载、无需解包到 %TEMP%，CI 上稳定可靠，作为发布门槛
-          $p = Start-Process -FilePath "dist\DiskCC\DiskCC.exe" -ArgumentList "--version" -PassThru
-          if (-not $p.WaitForExit(120000)) { $p.Kill(); Write-Error "onedir exe smoke test timed out"; exit 1 }
+          # 冒烟：onedir 直接从程序目录加载、无需解包到 %TEMP%，CI 上稳定可靠，作为发布门槛。
+          # GUI（console=False）exe 不接管控制台；Start-Process 不重定向时，WaitForExit 对
+          # 窗口化进程可能不返回，误判超时。这里重定向到文件打破该问题，并输出内容便于诊断。
+          $env:QT_QPA_PLATFORM = 'offscreen'   # 防御性：避免 Qt 在无显示环境初始化异常
+          $so = "onedir_smoke.out"; $se = "onedir_smoke.err"
+          $p = Start-Process -FilePath "dist\DiskCC\DiskCC.exe" -ArgumentList "--version" -PassThru `
+               -RedirectStandardOutput $so -RedirectStandardError $se -WindowStyle Hidden
+          if (-not $p.WaitForExit(90000)) { $p.Kill(); Write-Error "onedir exe smoke test timed out"; exit 1 }
+          Write-Host "=== onedir stdout ==="; Get-Content $so -ErrorAction SilentlyContinue
+          Write-Host "=== onedir stderr ==="; Get-Content $se -ErrorAction SilentlyContinue
           if ($p.ExitCode -ne 0) { Write-Error "onedir exe smoke test failed (exit $($p.ExitCode))"; exit 1 }
           Write-Host "onedir exe 启动正常"
           Compress-Archive -Path dist\DiskCC -DestinationPath "DiskCC-${{ github.ref_name }}-win64.zip"
@@ -83,8 +90,13 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath "dist\DiskCC.exe" -ArgumentList "--version" -PassThru
-          if (-not $p.WaitForExit(180000)) { $p.Kill(); Write-Warning "onefile exe 冒烟超时（CI 解包被扫描，非产品问题）"; exit 0 }
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          $so = "onefile_smoke.out"; $se = "onefile_smoke.err"
+          $p = Start-Process -FilePath "dist\DiskCC.exe" -ArgumentList "--version" -PassThru `
+               -RedirectStandardOutput $so -RedirectStandardError $se -WindowStyle Hidden
+          if (-not $p.WaitForExit(150000)) { $p.Kill(); Write-Warning "onefile exe 冒烟超时（CI 解包被扫描，非产品问题）"; exit 0 }
+          Write-Host "=== onefile stdout ==="; Get-Content $so -ErrorAction SilentlyContinue
+          Write-Host "=== onefile stderr ==="; Get-Content $se -ErrorAction SilentlyContinue
           if ($p.ExitCode -ne 0) { Write-Warning "onefile exe 冒烟退出码 $($p.ExitCode)"; exit 0 }
           Write-Host "single-file exe 启动正常"
 
